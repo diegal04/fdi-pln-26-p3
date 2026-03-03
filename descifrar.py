@@ -9,9 +9,8 @@ Estructura detectada en el archivo:
 """
 
 import os
-from collections import Counter
 
-ARCHIVO = os.path.join(os.path.dirname(__file__), "binarios", "principal.bin")
+CARPETA = os.path.join(os.path.dirname(__file__), "binarios")
 
 # Palabras españolas comunes para puntuar candidatos
 # Bytes especiales (detectados analizando el contexto del texto)
@@ -85,106 +84,91 @@ def decodificar_cesar_letras(datos: bytes, offset: int) -> str:
     return "".join(resultado)
 
 
-def main():
-    with open(ARCHIVO, "rb") as f:
+def descifrar_limpio(datos: bytes, offset: int) -> str:
+    """Reconstruye el texto aplicando el offset y la tabla de modificadores diacríticos."""
+    resultado = []
+    for b in datos:
+        if b == 10:
+            resultado.append("\n")
+        elif b == 11:
+            resultado.append(" ")
+        elif b == 70:
+            resultado.append(".")
+        elif b == 52:
+            if resultado and resultado[-1] in ENIE:
+                resultado[-1] = ENIE[resultado[-1]]
+            else:
+                resultado.append("ñ")
+        elif b == 50:
+            if resultado and resultado[-1] in ACENTO:
+                resultado[-1] = ACENTO[resultado[-1]]
+            else:
+                resultado.append("´")
+        elif b == 51:
+            if resultado and resultado[-1] in DIERESIS:
+                resultado[-1] = DIERESIS[resultado[-1]]
+            else:
+                resultado.append("¨")
+        elif b == 53:
+            if resultado:
+                resultado[-1] = resultado[-1].upper()
+        else:
+            resultado.append(chr(b + offset))
+    return "".join(resultado)
+
+
+def procesar_archivo(ruta: str) -> None:
+    nombre = os.path.basename(ruta)
+    print("\n" + "█" * 70)
+    print(f"  ARCHIVO: {nombre}")
+    print("█" * 70)
+
+    with open(ruta, "rb") as f:
         datos = f.read()
 
-    print(f"Archivo: {ARCHIVO}")
-    print(f"Bytes totales: {len(datos)}")
-    print(f"Valores únicos: {sorted(set(datos))}\n")
+    print(f"  Bytes: {len(datos)} | Valores únicos: {sorted(set(datos))}\n")
 
-    # ─── MÉTODO 1: César puro sobre bytes (offset 0–255) ─────────────────────
-    print("=" * 70)
-    print("MÉTODO 1 — César sobre bytes completos (offset aditivo mod 256)")
-    print("=" * 70)
-
-    candidatos_bytes = []
+    # ── Buscar el mejor offset probando 0–255 ────────────────────────────────
+    candidatos = []
     for offset in range(256):
         texto = decodificar_cesar_bytes(datos, offset)
         puntos = puntuar(texto)
-        # filtro: al menos el 70% de los chars deben ser imprimibles
         imprimibles = sum(1 for c in texto if c.isprintable() or c in "\n ")
-        if imprimibles / max(len(texto), 1) >= 0.70:
-            candidatos_bytes.append((puntos, offset, texto))
+        ratio = imprimibles / max(len(texto), 1)
+        if ratio >= 0.70:
+            candidatos.append((puntos, offset, texto))
 
-    candidatos_bytes.sort(reverse=True)
-    for puntos, offset, texto in candidatos_bytes[:5]:
-        print(f"\n  Offset={offset:3d} | Puntuación={puntos}")
-        print(f"  {repr(texto[:120])}")
+    if not candidatos:
+        print("  [!] No se encontró ningún offset válido (archivo posiblemente corrupto o con otro esquema).")
+        print(f"  Bytes en crudo: {list(datos)}")
+        return
 
-    # ─── MÉTODO 2: César solo sobre letras (módulo 26) ───────────────────────
-    print("\n" + "=" * 70)
-    print("MÉTODO 2 — César sobre letras (mod 26, rango [20–45] → a–z)")
-    print("=" * 70)
+    candidatos.sort(reverse=True)
 
-    candidatos_letras = []
-    for offset in range(26):
-        texto = decodificar_cesar_letras(datos, offset)
-        puntos = puntuar(texto)
-        candidatos_letras.append((puntos, offset, texto))
+    print("  Top 3 candidatos (César sobre bytes):")
+    for puntos, offset, texto in candidatos[:3]:
+        print(f"    Offset={offset:3d} | Puntuación={puntos} | {repr(texto[:80])}")
 
-    candidatos_letras.sort(reverse=True)
-    for puntos, offset, texto in candidatos_letras[:5]:
-        print(f"\n  Offset={offset:2d} | Puntuación={puntos}")
-        print(f"  {repr(texto[:120])}")
+    mejor_puntos, mejor_offset, _ = candidatos[0]
 
-    # ─── MEJOR CANDIDATO GLOBAL ───────────────────────────────────────────────
-    todos = candidatos_bytes + candidatos_letras
-    todos.sort(reverse=True)
-    mejor_puntos, mejor_offset, mejor_texto = todos[0]
+    print(f"\n  ── Decodificación con offset={mejor_offset} ──")
+    print(descifrar_limpio(datos, mejor_offset))
 
-    print("\n" + "=" * 70)
-    print("MEJOR CANDIDATO GLOBAL")
-    print("=" * 70)
-    print(f"Offset={mejor_offset} | Puntuación={mejor_puntos}")
-    print()
-    print(mejor_texto)
 
-    # ─── DECODIFICACIÓN LIMPIA CON TABLA DE ESPECIALES ────────────────────────
-    print("\n" + "=" * 70)
-    print("DECODIFICACIÓN LIMPIA (offset=77 + modificadores diacríticos)")
-    print("=" * 70)
+def main():
+    archivos = sorted(
+        os.path.join(CARPETA, f)
+        for f in os.listdir(CARPETA)
+        if f.endswith(".bin")
+    )
 
-    OFFSET = 77
-    resultado_limpio = []
-    i = 0
-    while i < len(datos):
-        b = datos[i]
-        if b == 10:
-            resultado_limpio.append("\n")
-        elif b == 11:
-            resultado_limpio.append(" ")
-        elif b == 70:
-            resultado_limpio.append(".")
-        elif b == 52:
-            # eñe: convierte n→ñ en la letra anterior
-            if resultado_limpio and resultado_limpio[-1] in ENIE:
-                resultado_limpio[-1] = ENIE[resultado_limpio[-1]]
-            else:
-                resultado_limpio.append("ñ")
-        elif b == 50:
-            # tilde sobre la vocal anterior
-            if resultado_limpio and resultado_limpio[-1] in ACENTO:
-                resultado_limpio[-1] = ACENTO[resultado_limpio[-1]]
-            else:
-                resultado_limpio.append("´")  # acento suelto si no hay vocal previa
-        elif b == 51:
-            # diéresis sobre la vocal anterior
-            if resultado_limpio and resultado_limpio[-1] in DIERESIS:
-                resultado_limpio[-1] = DIERESIS[resultado_limpio[-1]]
-            else:
-                resultado_limpio.append("¨")
-        elif b == 53:
-            # mayúscula de la letra anterior
-            if resultado_limpio:
-                resultado_limpio[-1] = resultado_limpio[-1].upper()
-        else:
-            resultado_limpio.append(chr(b + OFFSET))
-        i += 1
+    if not archivos:
+        print(f"No se encontraron archivos .bin en {CARPETA}")
+        return
 
-    texto_final = "".join(resultado_limpio)
-    print(texto_final)
-    print(f"\nOffset correcto: {OFFSET}")
+    for ruta in archivos:
+        procesar_archivo(ruta)
+
 
 
 if __name__ == "__main__":
